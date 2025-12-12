@@ -72,6 +72,13 @@ alembic>=1.13.0
 pika>=1.3.0  # RabbitMQ
 # kafka-python>=2.0.0  # Apache Kafka (uncomment if using)
 
+# Industrial data integration
+asyncua>=1.0.0  # OPC UA client for SCADA/PLC
+paho-mqtt>=1.6.0  # MQTT client for IoT sensors
+requests>=2.31.0  # HTTP client for MES/ERP APIs
+influxdb-client>=1.38.0  # InfluxDB for time-series data
+# pymodbus>=3.5.0  # Modbus TCP/RTU (uncomment if using)
+
 # Development tools
 ipython>=8.20.0
 jupyter>=1.0.0

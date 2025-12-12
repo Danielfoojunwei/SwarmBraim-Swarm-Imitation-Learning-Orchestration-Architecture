@@ -220,6 +220,106 @@ services:
     profiles:
       - simulation
 
+  # ==========================================================================
+  # MQTT Broker (Eclipse Mosquitto) - for IoT sensors
+  # ==========================================================================
+  mqtt-broker:
+    image: eclipse-mosquitto:2
+    container_name: swarm_mqtt
+    ports:
+      - "1883:1883"   # MQTT
+      - "9001:9001"   # WebSocket
+    volumes:
+      - ./config/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf
+      - mosquitto-data:/mosquitto/data
+      - mosquitto-logs:/mosquitto/log
+    networks:
+      - swarm-network
+
+  # ==========================================================================
+  # OPC UA Server Simulator - for SCADA/PLC testing
+  # ==========================================================================
+  opcua-server:
+    image: mcr.microsoft.com/iotedge/opc-plc:latest
+    container_name: swarm_opcua
+    ports:
+      - "50000:50000"  # OPC UA endpoint
+    environment:
+      - PLC_SIMULATION_MODE=True
+      - PLC_SIMULATION_INSTANCES=5
+    networks:
+      - swarm-network
+    profiles:
+      - industrial
+
+  # ==========================================================================
+  # InfluxDB - Time-series database for industrial metrics
+  # ==========================================================================
+  influxdb:
+    image: influxdb:2.7-alpine
+    container_name: swarm_influxdb
+    ports:
+      - "8086:8086"
+    environment:
+      - DOCKER_INFLUXDB_INIT_MODE=setup
+      - DOCKER_INFLUXDB_INIT_USERNAME=admin
+      - DOCKER_INFLUXDB_INIT_PASSWORD=adminpassword
+      - DOCKER_INFLUXDB_INIT_ORG=swarm
+      - DOCKER_INFLUXDB_INIT_BUCKET=production
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=swarm-admin-token
+    volumes:
+      - influxdb-data:/var/lib/influxdb2
+      - influxdb-config:/etc/influxdb2
+    networks:
+      - swarm-network
+
+  # ==========================================================================
+  # Chronograf - InfluxDB visualization (optional)
+  # ==========================================================================
+  chronograf:
+    image: chronograf:1.10-alpine
+    container_name: swarm_chronograf
+    ports:
+      - "8888:8888"
+    environment:
+      - INFLUXDB_URL=http://influxdb:8086
+      - INFLUXDB_TOKEN=swarm-admin-token
+    volumes:
+      - chronograf-data:/var/lib/chronograf
+    networks:
+      - swarm-network
+    depends_on:
+      - influxdb
+    profiles:
+      - industrial
+
+  # ==========================================================================
+  # Industrial Data Aggregator - Collects from SCADA/MES/IoT
+  # ==========================================================================
+  industrial-aggregator:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.industrial
+    container_name: swarm_industrial_aggregator
+    environment:
+      - PYTHONUNBUFFERED=1
+      - OPCUA_ENDPOINT=opc.tcp://opcua-server:50000
+      - MQTT_BROKER=mqtt-broker:1883
+      - INFLUXDB_URL=http://influxdb:8086
+      - INFLUXDB_TOKEN=swarm-admin-token
+      - ORCHESTRATOR_URL=http://orchestrator:8000
+    volumes:
+      - ./industrial_data:/workspace/industrial_data
+      - ./config:/workspace/config
+    networks:
+      - swarm-network
+    depends_on:
+      - mqtt-broker
+      - influxdb
+      - orchestrator
+    profiles:
+      - industrial
+
 networks:
   swarm-network:
     driver: bridge
@@ -231,3 +331,8 @@ volumes:
   prometheus-data:
   grafana-data:
   fl-models:
+  mosquitto-data:
+  mosquitto-logs:
+  influxdb-data:
+  influxdb-config:
+  chronograf-data:
