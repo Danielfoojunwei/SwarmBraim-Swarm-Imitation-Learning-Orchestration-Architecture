@@ -346,3 +346,148 @@ class FederatedLearningServiceClient:
         except requests.RequestException as e:
             logger.error(f"Failed to get training progress: {e}")
             return {"round_id": round_id, "progress": 0, "status": "unknown"}
+
+    def export_csa_from_training(
+        self,
+        training_job_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Export trained Cooperative Skill Artifact (CSA) from SwarmBridge
+
+        After multi-actor FL training completes, this method retrieves the
+        trained CSA in Dynamical-compatible MoE format.
+
+        Args:
+            training_job_id: SwarmBridge training job ID
+
+        Returns:
+            CSA dictionary in Dynamical-compatible format, or None if not ready
+
+        Raises:
+            requests.RequestException: If API call fails
+        """
+        logger.info(f"Exporting CSA from training job: {training_job_id}")
+
+        try:
+            # Check if training is complete
+            status_url = f"{self.swarm_bridge_url}/api/v1/training/jobs/{training_job_id}/status"
+            status_response = requests.get(status_url, timeout=self.timeout)
+            status_response.raise_for_status()
+
+            status_data = status_response.json()
+
+            if status_data.get("status") != "completed":
+                logger.warning(
+                    f"Training job {training_job_id} not completed (status={status_data.get('status')}). "
+                    "Cannot export CSA yet."
+                )
+                return None
+
+            # Export CSA
+            export_url = f"{self.swarm_bridge_url}/api/v1/training/jobs/{training_job_id}/export_csa"
+            export_response = requests.get(export_url, timeout=60)  # Longer timeout for export
+            export_response.raise_for_status()
+
+            csa_data = export_response.json()
+
+            # Validate CSA has required fields
+            required_fields = ["skill_id", "skill_name", "required_roles", "role_experts", "coordination_encoder"]
+            missing_fields = [f for f in required_fields if f not in csa_data]
+
+            if missing_fields:
+                logger.error(f"Exported CSA missing required fields: {missing_fields}")
+                return None
+
+            logger.info(
+                f"✅ Successfully exported CSA: {csa_data['skill_id']} "
+                f"(roles={csa_data['required_roles']}, version={csa_data.get('version', 'unknown')})"
+            )
+
+            return csa_data
+
+        except requests.RequestException as e:
+            logger.error(f"Failed to export CSA from training job {training_job_id}: {e}")
+            raise
+
+    def upload_csa_to_registry(
+        self,
+        csa_data: Dict[str, Any],
+        csa_registry_url: str = "http://localhost:8082",
+    ) -> bool:
+        """
+        Upload exported CSA to CSA Registry for discovery and deployment
+
+        Args:
+            csa_data: CSA dictionary (from export_csa_from_training)
+            csa_registry_url: URL of CSA Registry service
+
+        Returns:
+            True if upload successful
+
+        Raises:
+            requests.RequestException: If upload fails
+        """
+        skill_id = csa_data.get("skill_id", "unknown")
+        logger.info(f"Uploading CSA to registry: {skill_id}")
+
+        try:
+            registry_url = f"{csa_registry_url.rstrip('/')}/api/v1/skills"
+            response = requests.post(
+                registry_url,
+                json=csa_data,
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+
+            result = response.json()
+            logger.info(f"✅ CSA uploaded to registry: {skill_id} (registry_id={result.get('id')})")
+            return True
+
+        except requests.RequestException as e:
+            logger.error(f"Failed to upload CSA {skill_id} to registry: {e}")
+            raise
+
+    def complete_training_to_deployment_pipeline(
+        self,
+        training_job_id: str,
+        csa_registry_url: str = "http://localhost:8082",
+    ) -> Optional[str]:
+        """
+        Complete end-to-end pipeline: Training → CSA Export → Registry Upload
+
+        This is a convenience method that orchestrates the full flow from
+        completed SwarmBridge training to deployed CSA ready for use.
+
+        Args:
+            training_job_id: SwarmBridge training job ID
+            csa_registry_url: URL of CSA Registry
+
+        Returns:
+            CSA skill_id if successful, None otherwise
+        """
+        logger.info(f"Starting training-to-deployment pipeline for job: {training_job_id}")
+
+        try:
+            # Step 1: Export CSA from SwarmBridge
+            csa_data = self.export_csa_from_training(training_job_id)
+            if not csa_data:
+                logger.error("Failed to export CSA - training may not be complete")
+                return None
+
+            skill_id = csa_data["skill_id"]
+
+            # Step 2: Upload to CSA Registry
+            upload_success = self.upload_csa_to_registry(csa_data, csa_registry_url)
+            if not upload_success:
+                logger.error(f"Failed to upload CSA {skill_id} to registry")
+                return None
+
+            logger.info(
+                f"🎉 Training-to-deployment pipeline complete for {skill_id}! "
+                "CSA is now available for mission planning."
+            )
+            return skill_id
+
+        except Exception as e:
+            logger.error(f"Training-to-deployment pipeline failed: {e}")
+            return None
