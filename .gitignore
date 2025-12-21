@@ -64,3 +64,6 @@ venv.bak/
 # OS
 .DS_Store
 Thumbs.db
+
+# External dependencies (not tracked in git)
+external/multi_actor/
